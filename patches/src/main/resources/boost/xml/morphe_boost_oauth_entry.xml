@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceCategory xmlns:android="http://schemas.android.com/apk/res/android"
+    android:title="Reddit account">
+    <Preference
+        android:key="morphe_boost_oauth_tokens"
+        android:title="OAuth tokens"
+        android:summary="View/edit OAuth tokens"
+        android:persistent="false">
+        <intent
+            android:targetPackage="com.rubenmayayo.reddit"
+            android:targetClass="app.morphe.extension.boost.settings.BoostSettingsActivity">
+            <extra android:name="morphe_screen" android:value="oauth_tokens" />
+        </intent>
+    </Preference>
+</PreferenceCategory>

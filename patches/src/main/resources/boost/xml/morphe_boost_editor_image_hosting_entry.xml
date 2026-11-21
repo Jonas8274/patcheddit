@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceCategory xmlns:android="http://schemas.android.com/apk/res/android"
+    android:title="Media uploads">
+    <Preference
+        android:icon="@drawable/ic_photo_outline_24dp"
+        android:key="morphe_boost_image_hosting_settings"
+        android:title="Editor image hosting"
+        android:summary="Images added to text: Imgur - default"
+        android:persistent="false">
+        <intent
+            android:targetPackage="com.rubenmayayo.reddit"
+            android:targetClass="app.morphe.extension.boost.settings.BoostSettingsActivity">
+            <extra android:name="morphe_screen" android:value="image_hosting" />
+        </intent>
+    </Preference>
+</PreferenceCategory>
