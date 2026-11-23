@@ -1,0 +1,97 @@
+package app.morphe.patches.reddit.customclients.relay.fix.slink
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.util.smali.ExternalLabel
+import app.morphe.patches.reddit.customclients.RESOLVE_S_LINK_METHOD
+import app.morphe.patches.reddit.customclients.SET_ACCESS_TOKEN_METHOD
+import app.morphe.patches.reddit.customclients.AppCompatibility
+import app.morphe.patches.reddit.customclients.ExtensionPatches
+import app.morphe.patches.reddit.customclients.fixSLinksPatch
+import app.morphe.util.findInstructionIndicesReversedOrThrow
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
+
+const val EXTENSION_CLASS_DESCRIPTOR = "Lapp/morphe/extension/relay/FixSLinksPatch;"
+
+@Suppress("unused")
+val fixSLinksPatch = fixSLinksPatch(
+    extensionPatch = ExtensionPatches.Relay,
+) {
+    compatibleWith(*AppCompatibility.Relay)
+
+    execute {
+        RefreshTokenAccessFingerprint.matchAll().forEach { match ->
+            match.method.findInstructionIndicesReversedOrThrow(refreshTokenAccessFilter).forEach { index ->
+                // Now inject a call to our extension method to also set the access token there.
+                val instruction = match.method.getInstruction(index)
+                val register = (instruction as TwoRegisterInstruction).registerA
+                match.method.addInstruction(
+                    index,
+                    """
+                        invoke-static { v$register }, $EXTENSION_CLASS_DESCRIPTOR->$SET_ACCESS_TOKEN_METHOD
+                    """
+                )
+            }
+        }
+
+        // region Patch navigation handler.
+
+        IntentFilterActivityFingerprint.method.apply {
+            val index = IntentFilterActivityFingerprint.instructionMatches.last().index
+            val register = getInstruction<OneRegisterInstruction>(index).registerA
+
+            addInstructionsWithLabels(
+                index + 1,
+                """
+                    invoke-static { v$register }, $EXTENSION_CLASS_DESCRIPTOR->$RESOLVE_S_LINK_METHOD
+                    move-result v5
+                    if-eqz v5, :continue
+                    return-void
+                """,
+                ExternalLabel("continue", getInstruction(index + 1)),
+            )
+        }
+
+        // endregion
+
+        // region Patch in-app link handler.
+
+        urlLinkClickManagerFingerprint.method.apply {
+            // p1 holds the url. v0 is safe to clobber here because the method's locals
+            // (v0 to v7) are not yet initialised at index 0.
+            addInstructionsWithLabels(
+                0,
+                """
+                    invoke-static { p1 }, $EXTENSION_CLASS_DESCRIPTOR->$RESOLVE_S_LINK_METHOD
+                    move-result v0
+                    if-eqz v0, :continue
+                    return-void
+                """,
+                ExternalLabel("continue", getInstruction(0)),
+            )
+        }
+
+        // endregion
+
+        // region Patch post and comment view link handler.
+
+        webAndCommentsFragmentLinkFingerprint.method.apply {
+            // p1 holds the url. v0 is safe to clobber here because the method's locals
+            // (v0 to v6) are not yet initialised at index 0.
+            addInstructionsWithLabels(
+                0,
+                """
+                    invoke-static { p1 }, $EXTENSION_CLASS_DESCRIPTOR->$RESOLVE_S_LINK_METHOD
+                    move-result v0
+                    if-eqz v0, :continue
+                    return-void
+                """,
+                ExternalLabel("continue", getInstruction(0)),
+            )
+        }
+
+        // endregion
+    }
+}
