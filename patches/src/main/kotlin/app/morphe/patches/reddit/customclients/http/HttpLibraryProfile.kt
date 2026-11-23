@@ -1,0 +1,61 @@
+/*
+ * Copyright 2026 wchill.
+ *
+ * See the included NOTICE file for GPLv3 section 7 terms.
+ */
+
+package app.morphe.patches.reddit.customclients.http
+
+import app.morphe.patches.reddit.customclients.misc.extension.mapping.ProguardMapping
+import app.morphe.patches.reddit.customclients.redditisfun.bindings.rifHttpLibraryResourceNamespace
+import com.android.tools.smali.dexlib2.iface.ClassDef
+import java.io.Reader
+import java.io.StringReader
+
+internal fun httpLibraryResourceNamespace(
+    client: String,
+    packageName: String,
+    nativeDefinitions: List<ClassDef> = emptyList(),
+): String = when (client) {
+    "redditisfun" -> rifHttpLibraryResourceNamespace(nativeDefinitions)
+    "relay" -> when (packageName) {
+        "free.reddit.news" -> "relay/free"
+        "reddit.news" -> "relay/pro"
+        else -> error("Unsupported Relay HTTP library profile: $packageName")
+    }
+    "syncforreddit" -> when (packageName) {
+        "com.laurencedawson.reddit_sync" -> "syncforreddit"
+        "com.laurencedawson.reddit_sync.pro" -> "syncforreddit/pro"
+        else -> error("Unsupported Sync HTTP library profile: $packageName")
+    }
+    else -> client
+}
+
+internal class HttpLibraryProfile private constructor(
+    val mapping: ProguardMapping,
+    private val nativePrefixes: List<String>,
+    private val nativeHelpers: Set<String>,
+    private val callerPrefixes: List<String>,
+    private val callerClasses: Set<String>,
+) {
+    fun isNative(type: String): Boolean {
+        if (type in callerClasses || callerPrefixes.any(type::startsWith)) return false
+        return type in nativeHelpers || type in mapping.classes || nativePrefixes.any(type::startsWith)
+    }
+
+    companion object {
+        fun read(input: Reader): HttpLibraryProfile {
+            val text = input.readText()
+            fun headers(name: String) = text.lineSequence()
+                .filter { it.startsWith("# $name: ") }
+                .map { it.substringAfter(": ").trim() }.toList()
+            return HttpLibraryProfile(
+                ProguardMapping.read(StringReader(text)),
+                headers("native-prefix"),
+                headers("native-helper").toSet(),
+                headers("caller-prefix"),
+                headers("caller-class").toSet(),
+            )
+        }
+    }
+}
