@@ -1,0 +1,305 @@
+/*
+ * Copyright 2026 wchill.
+ * https://github.com/wchill/patcheddit
+ *
+ * See the included NOTICE file for GPLv3 §7(b) and §7(c) terms that apply to this code.
+ * Modifications Copyright 2026 brealorg.
+ * Adapted from https://github.com/brealorg/breal-morphe-patches (0226c2e).
+ */
+
+package app.morphe.patches.reddit.customclients.boostforreddit.http.reddit
+
+import app.morphe.patcher.Fingerprint
+import app.morphe.patches.reddit.customclients.boostforreddit.bindings.BoostApi
+import app.morphe.patches.reddit.customclients.boostforreddit.bindings.BoostFieldBinding
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.instructions
+import app.morphe.patcher.resource.ResourceType.STRING
+import app.morphe.patcher.resource.resourceId
+import app.morphe.patches.reddit.customclients.morpheBytecodePatch
+import app.morphe.patcher.util.proxy.mutableTypes.MutableField.Companion.toMutable
+import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
+import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
+import app.morphe.patcher.util.smali.ExternalLabel
+import app.morphe.patches.reddit.customclients.AppCompatibility
+import app.morphe.patches.reddit.customclients.ExtensionPatches
+import app.morphe.patches.reddit.customclients.boostforreddit.http.REDDIT_UNDELETE_APPLIED_RESOURCE
+import app.morphe.patches.reddit.customclients.boostforreddit.http.undeleteAppliedMarkerPatch
+import app.morphe.patches.reddit.customclients.boostforreddit.wrapHook
+import app.morphe.patcher.util.getReference
+import app.morphe.patcher.util.returnEarly
+import com.android.tools.smali.dexlib2.AccessFlags
+import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
+import com.android.tools.smali.dexlib2.immutable.ImmutableField
+import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
+import app.morphe.patches.all.misc.PatchCategory
+
+private const val GLIDE_REDDIT_MEDIA_WAYBACK_DESCRIPTOR =
+    "Lapp/morphe/extension/boost/http/reddit/GlideRedditMediaWayback;->open(Ljava/net/HttpURLConnection;I)Ljava/io/InputStream;"
+internal const val EXTRA_EMOJI_CONTEXT_KEY = "extraEmoji"
+internal const val EXTRA_EMOJI_GETTER = "getExtraEmoji"
+internal const val ARCHIVE_RETRY_KEY = "morpheArchiveRetry"
+
+private fun extraEmojiInstructions(
+    viewField: BoostFieldBinding,
+    separatorField: BoostFieldBinding? = null,
+): String {
+    val separator = separatorField?.let {
+        """
+            iget-object v2, v1, ${BoostApi.BabushkaText.parts}
+            invoke-virtual {v2}, Ljava/util/ArrayList;->isEmpty()Z
+            move-result v2
+            if-nez v2, :morphe_extra_emoji_separator_done
+            iget-object v2, p0, $it
+            invoke-virtual {v1, v2}, ${BoostApi.BabushkaText.addPart}
+            :morphe_extra_emoji_separator_done
+        """
+    }.orEmpty()
+    return """
+        invoke-virtual {p1}, ${BoostApi.ContributionModel.type}->$EXTRA_EMOJI_GETTER()Ljava/lang/String;
+        move-result-object v0
+        invoke-static {v0}, Landroid/text/TextUtils;->isEmpty(Ljava/lang/CharSequence;)Z
+        move-result v1
+        if-nez v1, :morphe_extra_emoji_done
+        iget-object v1, p0, $viewField
+        if-eqz v1, :morphe_extra_emoji_done
+        $separator
+        new-instance v2, ${BoostApi.BabushkaTextPartBuilder.type}
+        invoke-direct {v2, v0}, ${BoostApi.BabushkaTextPartBuilder.construct}
+        new-instance v0, ${BoostApi.BabushkaTextPart.type}
+        invoke-direct {v0, v2}, ${BoostApi.BabushkaTextPart.construct}
+        invoke-virtual {v1, v0}, ${BoostApi.BabushkaText.addPart}
+        invoke-virtual {v1}, ${BoostApi.BabushkaText.updateText}
+        const/4 v0, 0x0
+        invoke-virtual {v1, v0}, Landroid/view/View;->setVisibility(I)V
+        :morphe_extra_emoji_done
+    """
+}
+
+@Suppress("unused")
+val undeleteRedditPatch = morpheBytecodePatch(
+    name = "Automatically undelete Reddit content",
+    description = "Restores deleted and removed posts and comments from Arctic Shift, and their media from the Wayback Machine.",
+    default = true,
+    extensionPatch = ExtensionPatches.Boost,
+    category = PatchCategory.UNDELETE,
+    preferenceKey = "morphe_boost_reddit_undelete_enabled",
+    defaultEnabled = false,
+    optionsResource = "morphe_boost_undelete_options",
+    resourceDirectory = "boost",
+    settingsSummary = "Restore removed Reddit posts and comments from Arctic Shift and the Wayback Machine. " +
+        "When a thread has removed content, its post and comment IDs are sent to these third-party archives.",
+) { setting ->
+    dependsOn(ExtensionPatches.Boost, undeleteAppliedMarkerPatch(REDDIT_UNDELETE_APPLIED_RESOURCE))
+    compatibleWith(*AppCompatibility.Boost)
+
+    execute {
+        for (interceptor in listOf("RedditSubmission", "RedditSubreddit", "RedditMedia")) {
+            Fingerprint(
+                definingClass = "Lapp/morphe/extension/boost/http/reddit/${interceptor}UndeleteInterceptor;",
+                name = "isPatchIncluded",
+            ).method.returnEarly(true)
+        }
+        // Glide uses HttpURLConnection directly, bypassing the OkHttp interceptors.
+        GlideHttpUrlFetcherFetchFingerprint.method.apply {
+            val nativeInstructions = implementation!!.instructions
+            val responseCodeIndices = nativeInstructions.withIndex().filter { (_, instruction) ->
+                instruction.opcode == Opcode.INVOKE_STATIC &&
+                    instruction.getReference<MethodReference>()?.toString() ==
+                    BoostApi.HttpUrlFetcher.responseCode.toString()
+            }.map { it.index }
+            check(responseCodeIndices.size == 3) {
+                "Unexpected Glide response handling: $responseCodeIndices"
+            }
+            val normalResponseIndex = responseCodeIndices.first()
+            val statusRegister = getInstruction<OneRegisterInstruction>(normalResponseIndex + 1).registerA
+            val errorHandlerStart = nativeInstructions.withIndex().last { (index, instruction) ->
+                index < responseCodeIndices.last() && instruction.opcode == Opcode.MOVE_EXCEPTION
+            }.index + 1
+            check(getInstruction(errorHandlerStart).opcode == Opcode.NEW_INSTANCE)
+
+            // getInputStream() throws on HTTP errors before the normal status
+            // branch. Keep the fetcher receiver and caught exception intact.
+            addInstructionsWithLabels(
+                errorHandlerStart,
+                """
+                    iget-object v3, p0, ${BoostApi.HttpUrlFetcher.connection}
+                    invoke-static {v3}, ${BoostApi.HttpUrlFetcher.responseCode}
+                    move-result v4
+                    invoke-static {v3, v4}, $GLIDE_REDDIT_MEDIA_WAYBACK_DESCRIPTOR
+                    move-result-object v3
+                    if-eqz v3, :morphe_native_glide_error
+                    iput-object v3, p0, ${BoostApi.HttpUrlFetcher.stream}
+                    return-object v3
+                """,
+                ExternalLabel("morphe_native_glide_error", getInstruction(errorHandlerStart)),
+            )
+            addInstructionsWithLabels(
+                normalResponseIndex + 2,
+                """
+                    iget-object v3, p0, ${BoostApi.HttpUrlFetcher.connection}
+                    invoke-static {v3, v$statusRegister}, $GLIDE_REDDIT_MEDIA_WAYBACK_DESCRIPTOR
+                    move-result-object v3
+                    if-eqz v3, :morphe_native_glide_response
+                    iput-object v3, p0, ${BoostApi.HttpUrlFetcher.stream}
+                    return-object v3
+                """,
+                ExternalLabel("morphe_native_glide_response", getInstruction(normalResponseIndex + 2)),
+            )
+        }
+
+        // region Add additional field and marshaling code for ContributionModel.
+        val fieldType = "Ljava/lang/String;"
+        ContributionModelConstructorFingerprint.classDef.apply {
+            fields.add(ImmutableField(
+                type, ARCHIVE_RETRY_KEY, fieldType, AccessFlags.PROTECTED.value,
+                null, null, null,
+            ).toMutable())
+            methods.add(ImmutableMethod(
+                type, "morpheArchiveRetryJson", emptyList(), fieldType, AccessFlags.PUBLIC.value,
+                null, null, MutableMethodImplementation(2),
+            ).toMutable().apply {
+                addInstructions(0, """
+                    iget-object v0, p0, $type->$ARCHIVE_RETRY_KEY:$fieldType
+                    return-object v0
+                """)
+            })
+            fields.add(
+                ImmutableField(
+                type,
+                EXTRA_EMOJI_CONTEXT_KEY,
+                fieldType,
+                AccessFlags.PROTECTED.value,
+                null,
+                null,
+                null,
+            ).toMutable())
+            methods.add(
+                ImmutableMethod(
+                type,
+                EXTRA_EMOJI_GETTER,
+                emptyList(),
+                fieldType,
+                AccessFlags.PUBLIC.value,
+                null,
+                null,
+                MutableMethodImplementation(2),
+            ).toMutable().apply {
+                addInstructions(
+                    0,
+                    """
+                    iget-object v0, p0, $type->$EXTRA_EMOJI_CONTEXT_KEY:$fieldType
+                    return-object v0
+                """,
+                )
+            },)
+        }
+        ContributionModelConstructorFingerprint.method.apply {
+            addInstructions(
+                instructions.lastIndex,
+                """
+                invoke-virtual      {p1}, Landroid/os/Parcel;->readString()$fieldType
+                move-result-object  v0
+                iput-object         v0, p0, ${this.definingClass}->$EXTRA_EMOJI_CONTEXT_KEY:$fieldType
+                invoke-virtual      {p1}, Landroid/os/Parcel;->readString()$fieldType
+                move-result-object  v0
+                iput-object         v0, p0, ${this.definingClass}->$ARCHIVE_RETRY_KEY:$fieldType
+                """
+            )
+        }
+        ContributionModelWriteToParcelFingerprint.method.apply {
+            addInstructions(
+                instructions.lastIndex,
+                """
+                iget-object         v0, p0, ${this.definingClass}->$EXTRA_EMOJI_CONTEXT_KEY:$fieldType
+                invoke-virtual      {p1, v0}, Landroid/os/Parcel;->writeString($fieldType)V
+                iget-object         v0, p0, ${this.definingClass}->$ARCHIVE_RETRY_KEY:$fieldType
+                invoke-virtual      {p1, v0}, Landroid/os/Parcel;->writeString($fieldType)V
+                """
+            )
+        }
+        // endregion
+
+        // region Modify SubmissionModel/CommentModel deserialization.
+        arrayOf(SubmissionModelDeserializeFingerprint, CommentModelDeserializeFingerprint).forEach { fingerprint ->
+            val retryJson = """
+                invoke-static {p0}, Lapp/morphe/extension/boost/http/reddit/ArcticShiftRetry;->retryJson(Ljava/lang/Object;)Ljava/lang/String;
+                move-result-object v1
+            """
+            fingerprint.wrapHook(
+                setting = setting,
+                after = """
+                    if-eqz v0, :morphe_extra_emoji_deserialized
+                    const-string        v1, "extraEmoji"
+                    invoke-virtual      {p0, v1}, ${BoostApi.JsonModel.data}
+                    move-result-object  v1
+                    iput-object         v1, v0, ${BoostApi.ContributionModel.type}->extraEmoji:Ljava/lang/String;
+                    $retryJson
+                    iput-object         v1, v0, ${BoostApi.ContributionModel.type}->$ARCHIVE_RETRY_KEY:Ljava/lang/String;
+                    :morphe_extra_emoji_deserialized
+                """,
+            )
+        }
+        // endregion
+
+        // region Extend emojis used for BabushkaText.
+        SetCommentBabushkaTextFingerprint.wrapHook(
+            setting = setting,
+            after = extraEmojiInstructions(
+                BoostApi.CommentViewHolder.distinguishedTv,
+            ),
+        )
+        SetSubmissionBabushkaTextFingerprint.wrapHook(
+            setting = setting,
+            after = extraEmojiInstructions(
+                BoostApi.SubmissionViewHolder.infoTop,
+                BoostApi.SubmissionViewHolder.infoSeparator,
+            ),
+        )
+
+        // endregion
+
+        // region Fix the deletion reason detection
+        setting.patchMethod(StateSubmissionViewSetStateFingerprint) { overrideRemovalReasonStrings() }
+        // endregion
+        installArchiveRetry()
+    }
+}
+
+internal fun MutableMethod.overrideRemovalReasonStrings() {
+    addInstructionsWithLabels(
+        0,
+        """
+            iget-object v0, p1, ${BoostApi.SubmissionModel.removalCategory}
+            const-string v1, "copyright_takedown"
+            invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+            move-result v1
+            if-eqz v1, :morphe_check_content_takedown
+            const v1, ${resourceId(STRING, "removed_by_copyright_takedown_header")}
+            const v2, ${resourceId(STRING, "removed_by_copyright_takedown_summary")}
+            goto :morphe_show_removal_reason
+            :morphe_check_content_takedown
+            const-string v1, "content_takedown"
+            invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+            move-result v1
+            if-eqz v1, :morphe_native_removal_reason
+            const v1, ${resourceId(STRING, "removed_by_anti_evil_ops_header")}
+            const v2, ${resourceId(STRING, "removed_by_anti_evil_ops_summary")}
+            :morphe_show_removal_reason
+            iget-object v0, p0, ${BoostApi.StateSubmissionView.headerText}
+            invoke-virtual {v0, v1}, Landroid/widget/TextView;->setText(I)V
+            iget-object v0, p0, ${BoostApi.StateSubmissionView.summaryText}
+            invoke-virtual {v0, v2}, Landroid/widget/TextView;->setText(I)V
+            const/4 v0, 0x0
+            invoke-virtual {p0, v0}, Landroid/view/View;->setVisibility(I)V
+            return-void
+        """,
+        ExternalLabel("morphe_native_removal_reason", getInstruction(0)),
+    )
+}
