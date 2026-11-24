@@ -1,0 +1,264 @@
+# 👋🧩 Patcheddit
+
+Morphe compatible patches for third party Reddit apps.
+
+## ❓ About
+
+Patcheddit is a Morphe compatible patch bundle that supports patching the OAuth login information for 3rd party reddit apps.
+
+In addition, patches for some apps contain additional features that were not present in ReVanced.
+
+## Differences from official patch set
+
+### All clients
+* **Reddit API fixes** combines the applicable Reddit API and login repairs into one patch for BaconReader, Boost, Infinity, Joey, Relay (including Pro), RIF (free and paid), and Sync (including Pro). These repairs are always active when included.
+    * Includes missing gallery image repairs when opening posts in BaconReader, Boost, Joey, Relay, RIF, and Sync, including recoverable GIFs in Relay. If a previously opened gallery still fails after patching, clear the app's cache (not its storage).
+    * Relay's subreddit sidebars remain usable when Reddit omits activity counters.
+    * BaconReader, Boost, Joey, Relay, RIF, and Sync use Reddit's JSON endpoint for `r/all` feeds.
+    * Opens Reddit subreddit and profile share links in BaconReader, Boost, Joey, Relay, RIF, and Sync. Uses the active Reddit session when available instead of relying on anonymous web requests. Joey also handles Reddit app and email links.
+* **Fix Redgifs API** restores playback in BaconReader, Joey, Relay, RIF, and Sync. BaconReader, Joey, and Relay prefer the original video with sound over silent previews.
+* **Fix random subreddit** restores Random in Boost, Infinity, Joey, Relay, RIF, and Sync. **RedditRand** (a third-party service) is the default. You can switch to **Reddit search** under **Patcheddit > Feed > Random subreddit source**. If the lookup fails, the app reports an error instead of loading the retired `r/random` feed.
+* **Fix comment video links** restores native playback of Reddit comment videos in BaconReader, Boost, Joey, RIF, and Sync without relying on post metadata to contain the video. Relay provides this through **Fix Reddit media link handling**.
+* **Prefer high refresh rate** requests a higher display refresh rate in BaconReader, Boost, Joey, Relay, RIF, and Sync. The display and Android still determine the actual refresh rate.
+* **Fix escaped URLs** repairs links broken by backslashes in posts and comments in BaconReader, Boost, Infinity, Joey, Relay, RIF, and Sync. It is separate from **Reddit API fixes** and can be switched off under **Patcheddit > Links**.
+* **Fix broken markdown links** repairs user and subreddit links displayed with stray Markdown brackets in those clients, without changing code examples or ordinary links. It can be switched off under **Patcheddit > Links**.
+* **Fix swipe back transparency** shows the previous screen during swipe-back gestures in Sync and Joey on Android 11 and newer.
+* **Fix Sync toolbar menu crashes** keeps Sort and More options working on feeds and comment threads in Sync for Reddit Free and Pro.
+* **Fix embedded YouTube playback** plays YouTube videos and Shorts in RIF and Sync for Reddit without requiring the YouTube app. Your existing external link settings still apply.
+* **Log exceptions** saves fatal crashes for every supported client using morphe-patches-library's shared crash logger. BaconReader and Boost hook their native error-reporting handlers; other clients capture exceptions reported through Android error/warning logging, stack traces, and Crashlytics when present, without removing the original logging.
+* **Permanently disable NSFW** is an opt-in patch for the Reddit clients. It adds a checkbox under **Patcheddit > Content filtering**. Once confirmed, the checkbox stays checked and cannot be changed, and the lock hides content Reddit marks as NSFW from feeds, community search, and subscriptions. Boost hides cached subreddit names in the subscription sidebar until Reddit confirms they aren't marked NSFW. Removing the control by repatching does not turn off an active lock. A Boost backup made with the lock enabled carries it to a new install.
+    * In **Diagnostics**, open a saved report to delete it, or use **Clear all** on either report screen. This does not affect other apps or copies saved outside the report folders.
+    * **Diagnostics > Fatal crash logs > Debug logging** lets you opt in to Debug or Verbose Morphe messages in future crash reports. It is off by default; review reports before sharing.
+    * Fatal reports are saved in `Documents/Morphe`, falling back to the app-specific external Documents folder if public storage is unavailable. Non-fatal reports use private `no_backup/morphe-exceptions` storage, rotating at 4 MiB per file with one previous file retained and excluded from Android app backups.
+    * Common credential-bearing lines are redacted from non-fatal logs; fatal reports are not filtered. Other personal or request data can remain, so review exported copies before sharing.
+* Every supported client exposes a Patcheddit settings menu with consistently sized, bundled icons. Included optional features register their own controls; deselected patches do not leave behind inactive options. **About Patcheddit** shows the installed patches version, checks for updates, and links to releases, the project, and r/Patcheddit. **Credits** lists GitHub contributors and includes offline license notices. Pre-release builds also check the development release channel.
+    * Feature switches default to the patch's existing runtime behavior.
+    * OAuth client ID, redirect URI and user-agent overrides for clients other than Boost are settable in the Patcheddit settings menu. Empty overrides use the values configured when patching. For Boost, these settings are adjustable in the stock Developer settings menu.
+    * Infinity's patched callback URI is read-only because it is declared in the APK manifest. The original callback remains available when spoofing is disabled. Manifest/layout-only changes, including Android debugging, are also shown as read-only; repatch the app to change them.
+    * Changing OAuth credentials requires restarting and signing in again.
+
+### Boost for Reddit
+* **Reddit API fixes** loads History in small pages so it doesn't hold up other Reddit requests.
+* Boost patches target the official [Boost 1.14.4 APK](https://github.com/rubenmayayo/boost-for-reddit/releases/tag/v1.14.4).
+* **Load all inline media** shows linked images and GIFs immediately after their corresponding links in comments and text-post bodies, respecting Boost's inline-media setting. **Patcheddit > Media > Keep inline media URLs** defaults to on; turning it off hides bare URLs without removing descriptive labels.
+* **Fix image search** updates Google's image search to Google Lens while keeping Yandex and TinEye in the image-search submenu.
+* Boost 1.14.3 also handles the image-post submission kind, search callback lifecycle checks and media-viewer insets natively, so those overrides are no longer injected. The remaining navigation patches still support Patcheddit's custom navigation hosts and layout behavior.
+* Boost handles cached Redgifs playback without a separate fix.
+* **Repeat Boost thread level colors** repeats the color pattern in deep comment chains when **Thread level indicator** is set to colored lines or colored bars.
+* **Remember collapsed comments** keeps collapsed replies closed when you reopen their parent comment.
+* **Full Boost backup** adds **Export full backup** and **Import full backup** to Boost's Backup screen on Android 8 and newer. The ZIP includes settings, saved accounts and tokens, drafts, visited communities, and read-post history, but not widgets, media downloads, or caches. **Keep these unencrypted ZIP files private.** You can restore on the same or a newer Boost version. A restore replaces local data after confirmation and restart; the original settings-only backup is unchanged.
+* **Log exceptions** records errors reported through Boost's existing exception handler. **Settings > Patcheddit > Exception log** lists non-fatal reports, with **Fatal crash logs** alongside it in Diagnostics.
+    * Fatal reports can be previewed in the app and exported in full using **Save a copy**. Reports in public or app-specific Documents folders are listed when accessible.
+    * If app initialization or private storage is unavailable, logging failures are reported to Logcat without showing a toast.
+* **Import and export OAuth tokens** adds an editable JSON field and a **Save** button under **Settings > Patcheddit > OAuth tokens**. It displays the selected account's tokens for copying. Replace or edit the JSON to sign in or add an account without the browser login flow. There are no file import/export controls.
+    * **Save** checks the access-token owner with Reddit, validates the refresh token using Boost's configured OAuth client, and obtains fresh tokens before adding or updating the verified account. An expired access token can be restored with a valid refresh token. Boost then restarts with that account selected.
+    * Tokens are bound to their OAuth client. Configure the same client ID in Boost's native API settings before importing; the patch does not change API settings automatically.
+    * The JSON contains **unencrypted account credentials**. Copy it only into trusted apps and clear clipboard copies after use. The screen uses Android's secure-window flag to block screenshots and screen recording. The editor disables autofill, content capture and Android view-state saving, and asks keyboards not to learn its contents.
+    * The JSON requires string fields `access_token` and `refresh_token`. The selected account's JSON also includes `version: 1`, `username` and `client_id`; these metadata fields are optional when replacing tokens.
+* Image-upload features are separate patches:
+    * **Use Reddit for image uploads** selects Reddit hosting for image posts and galleries, without changing editor attachments. This is still needed to override Boost's remote-configurable hosting provider; Boost now chooses the image submission kind itself.
+    * **Configure editor image hosting** adds an editor-hosting setting for Imgur Free or ImgBB. It does not change post or gallery hosting.
+    * **Preview images in the editor** adds previews of supported image URLs without changing upload providers.
+* The content of deleted Reddit posts and comments can be loaded from [Project Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift).
+    * **Settings > Patcheddit > Undelete > Arctic Shift API base URL** can point to a self-hosted compatible API. Include the API path (usually `/api/`); leave it empty to use the public service. Restart Boost after changing it.
+    * This only works for text and images, and not all content can be restored. Videos are unlikely to be available.
+    * Removed posts/comments show a warning symbol if Arctic Shift returns an error or times out, but not when the archive has no copy. **Reload from Arctic Shift** is available for any post or comment not yet loaded from the archive; a successful reload updates the item in place. For non-removed posts and comments, only the text body is replaced.
+    * Content loaded from Arctic Shift shows a clock symbol unless it already has a removal symbol.
+    * Posts and comments loaded from Arctic Shift have a **Refresh post**/**Refresh comment** option that reloads the current version from Reddit.
+    * Posts/comments that were deleted are marked as follows:
+        * 🗑️ if removed by the author
+        * 🧹 if removed by a subreddit mod
+        * 🚓 if removed by reddit admins
+        * 🤖 if removed by anti-spam
+        * ©️ if removed due to a takedown notice
+        * 👿 if removed by Anti-Evil Operations
+        * 🚫 if the subreddit is banned
+    * Banned subreddits can be browsed with this functionality; however, rules/wiki pages are unavailable and the only sort option is by new.
+    * In order to view a deleted post, you need to already have a direct link to the post. Subreddit feeds will not show deleted posts (unless the subreddit was banned); this is because of the lack of sorting options and the high likelihood of seeing a ton of spam posts.
+    * Currently, this functionality is not working on user profiles. Removed posts you encounter on user pages need to be opened and refreshed for their content to load.
+    * This feature makes extra network requests, so posts will load a little slower. In particular, retrieving images from the Wayback Machine is heavily ratelimited.
+        * Caching is implemented to try and limit the impact of this.
+* Imgur images and albums are automatically loaded from the Wayback Machine if a 404 is detected.
+* Link context menus include an **Open with** submenu for Wayback Machine, Archive.is, Wallhop, smry.ai, RemovePaywall, Freedium, and Unwall. Each source can be enabled or disabled under **Settings > Patcheddit > Links**. When all sources are disabled, the menu shows a disabled **All archivers disabled** entry. Query parameters are stripped from archive links by default; this can also be changed in Patcheddit settings.
+* Links with query parameters offer an unchecked **Strip query parameters** checkbox for **Share link** and **Copy link**. Hide it using **Show strip query parameters option** in Patcheddit settings.
+
+### Relay
+* **Inline media** shows Reddit, Imgur, and Giphy images and GIFs in comment threads, comment listings, and text posts, including embedded Giphy GIFs. **Patcheddit > Media > Keep inline media URLs** defaults to on; turning it off hides bare URLs without removing descriptive labels.
+* **Fix Reddit media link handling** opens Reddit-hosted images, GIFs, and videos in Relay's native media viewer, including signed preview links, thumbnails, avatars, emoji, and Reddit videos linked in comments. It defaults to on under **Patcheddit > Media**.
+
+### reddit is fun
+* **Reddit API fixes** opens wrapped Reddit images and Matrix-hosted Reddit images in the built-in viewer, even without **Inline media**.
+* **Inline media** displays images, animated images, albums, and videos in comments and text posts, with sizing and playback controls under **Patcheddit > Media**. URLs are kept above previews by default; turn off **Keep inline media URLs** to hide bare URLs.
+* Restores Imgur album and gallery loading in the built-in viewer, album thumbnails, and links that include a title.
+* Restores native Redgifs playback and returns safely when a video is unavailable.
+* Enables pro features in free RIF. **Block ads** independently prevents feed, banner, and image-viewer ad loading. After changing it, refresh feeds and reopen albums.
+* Prevents invalid ad rows from crashing Platinum feeds, including package-renamed installations.
+* **Fix history import** merges history from settings backups without replacing existing visits.
+* **Post to profile** adds a My profile button to Submit and a Submit action on your own profile.
+* **Explain Reddit blocks** clarifies recognized signed-in feed blocks while preserving other Reddit errors.
+
+### Infinity for Reddit
+* Supports Infinity+, Infinity++, and the Patreon variant.
+* **Reddit API fixes** applies the configured OAuth values to login callbacks and API requests, including obfuscated code, and updates the browser-login callback intent filter.
+
+## 🚀 Get started
+
+1. Install [Morphe Manager](https://morphe.software/) and switch it to advanced/expert mode.
+2. Click [this link](https://morphe.software/add-source?github=wchill/patcheddit) to add this patch source to Morphe Manager.
+3. In Morphe Manager, find the app you want to patch.
+   * The supported apps are Boost, RIF, Sync, Relay, BaconReader, Joey, Infinity+, Infinity++, and Infinity (Patreon).
+4. Get the APK for your preferred, supported 3rd party reddit app. If you don't have it, you can download it from in the app. APKM bundles (aka split APKs) will also work.
+   * You should get the last available version for your reddit app, unless you are patching Relay. Relay v10.2.40 should be used instead of the latest.
+5. Select desired patches, then patch.
+   * **Reddit API fixes** includes RedReader 1.27 defaults, so you do not need to supply a client ID. See `What if I don't have a client ID?` below.
+   * If you use a custom OAuth client ID, make sure its redirect URI matches the one in **Reddit API fixes** options and on https://www.reddit.com/prefs/apps/.
+   * Upgrading from before 2.3.0 with saved **Spoof client** options? Keep that legacy patch enabled for one update, then launch the app once. It includes **Reddit API fixes** and saves the OAuth values in the app's API settings, preserving existing in-app overrides. You can then deselect **Spoof client** without losing the saved values. It is off by default for new installations.
+   * Infinity users must also keep the same redirect URI in **Reddit API fixes** when repatching, because Android's login callback is fixed in the APK manifest.
+6. Once patching is complete, install the app and set it up as usual.
+
+For assistance with patching, please post a thread in [/r/Patcheddit](https://www.reddit.com/r/Patcheddit/) or [/r/MorpheApp](https://www.reddit.com/r/MorpheApp/). Only use the GitHub issue tracker for legitimate bug reports or feature requests.
+
+### What if I don't have a client ID?
+
+Use the [RedReader 1.27](https://github.com/QuantumBadger/RedReader/releases/tag/v1.27) defaults included in **Reddit API fixes**:
+
+* Leave `OAuth client ID` empty.
+* Keep `Redirect URI` set to `redreader://rr_oauth_redir`.
+* Keep `User agent` set to `org.quantumbadger.redreader/1.27`.
+
+For another client's credentials, enter its client ID and matching redirect URI and user agent instead.
+
+### Resolving login problems
+
+RIF shows `Forbidden` on the feed before I sign in
+
+* Repatch RIF with the latest **Reddit API fixes**. The patch lets RIF load public feeds and comment threads without signing in. You still need an account to vote, post, or access account-specific content.
+
+I am unable to select the username/password fields on the login page - my keyboard pops up and then disappears quickly
+
+* Switch your phone to landscape mode. There is a cookie banner that needs to be dismissed, but it is bugged and only shows up on landscape mode.
+
+I either get `{}` or `Error: Invalid request to Oauth API`
+
+* Your redirect URI is probably wrong. It has to match exactly between the patching settings and your reddit installed app. If you're reusing an installed app you made before, then update the URI at https://www.reddit.com/prefs/apps/. Make sure you don't add `/` at the end.
+
+I cannot login, reddit is telling me that my username/password are invalid even though they are correct
+
+* Reddit doesn't like the network you're logging in from (corporate/work network, country with banned IP ranges due to abuse, etc). Try using a VPN or switching to cellular data.
+* Alternatively, this problem may go away if you restart your phone, clear cookies for Chrome, clear app data for Android System WebView, or update Android System WebView to the latest version.
+* See https://github.com/cygnusx-1-org/continuum/blob/master/SETUP.md#common-errors
+
+I cannot hit Accept on the Authorize screen
+
+* Change your reddit site language to English. There are reports that this screen does not work properly otherwise.
+
+I still get 403 Blocked
+
+* If you filled your user agent in with garbage, it will eventually be blocked by reddit. Also, reddit blocks any mention of rubenmayayo in the user agent.
+* Your user agent can also be blocked due to other terms: a user reported that he was getting 403 after patching, and it turned out to be because his username included `isfun` (which triggers a block from reddit's side due to them blocking the app Reddit is Fun).
+
+I get 401 when I open the app
+
+* You probably created a web app instead of an installed app. Delete the app, create an installed app and then repatch with the new client ID.
+* Don't use autofill when logging into Reddit. Manually type in or copy+paste your password.
+
+I'm getting 400 Bad Request while logged in
+
+* Either try logging out and logging back in, or uninstall the app (back up your settings first) then reinstall it.
+
+I get a `null: null` error when I open the app
+
+* Your client ID is incorrect, check that you copied it correctly.
+
+
+## 🧑‍💻 Development
+
+To develop and release Patcheddit, some things need to be considered:
+
+- Development starts in feature branches. Once a feature branch is ready, it is squashed and merged into the `dev` branch
+- The `dev` branch is merged into the `main` branch once it is ready for release
+- Semantic versioning is used to version Patcheddit. Patcheddit has a public API for other patches to use
+- Semantic commit messages are used for commits
+- Commits on the `dev` branch and `main` branch are automatically released
+via the [release.yml](.github/workflows/release.yml) workflow, which is also responsible for generating the changelog
+and updating the version of Patcheddit. It is triggered by pushing to the `dev` or `main` branch.
+The workflow uses the `publish` task to publish the release of Patcheddit
+- The `buildAndroid` task is used to build Patcheddit so that it can be used on Android.
+The `publish` task depends on the `buildAndroid` task, so it will be run automatically when publishing a release.
+
+Builds use the published morphe-patches-library version pinned in `gradle/libs.versions.toml`. To explicitly use a matching local `../morphe-patches-library` checkout as a composite build, pass `-PuseLocalMorphePatchesLibrary=true` to Gradle.
+
+### Updating Boost bindings
+
+Boost settings XML and layouts are stored under `patches/src/main/resources/boost/`, in `xml/` and `layout/`. Each feature includes its files through the internal `AddResources` patch. It registers individual target paths with the resource context so on-demand decoding tracks new values and view IDs. Settings entries are imported only when their feature patch is selected. Shared XML templates define menu categories, switches and read-only entries; registration fills their patch metadata without generating widget/layout XML.
+
+Use `morpheBytecodePatch` to register a feature automatically in the correct client's menu, including its extension, settings entry and independent settings-context bootstrap:
+
+```kotlin
+val examplePatch = morpheBytecodePatch(
+    name = "Example feature",
+    description = "Adds an optional feature.",
+    extensionPatch = ExtensionPatches.Boost,
+    category = PatchCategory.MEDIA,
+) { setting ->
+    compatibleWith(*AppCompatibility.Boost)
+    execute {
+        setting.guardHook("Lapp/morphe/extension/boost/feature/Feature;", "apply")
+    }
+}
+```
+
+`optionsResource` accepts a bundled `PreferenceCategory`; set `resourceDirectory = "boost"` for Boost XML. Existing preference keys and runtime defaults can be retained with `preferenceKey` and `defaultEnabled`, independently of patch-selection `default`. `addMorpheSettings` is available to patches using the original builders.
+
+Client discovery follows composite extension dependencies, including Boost's HTTP interceptor patch. App-agnostic uses of the existing public factories retain their always-on behavior; an unregistered extension produces a patcher warning instead of requiring a client-specific menu.
+
+Gate void/boolean extension hooks with `guardHook`; identity transforms can use `identity = true` to return the original input when disabled. Use `patchMethod` for reversible method-local bytecode changes and `replaceString` for constructor strings. For hooks sharing a native method, use `wrapHook(setting = setting)` so disabling one feature does not skip another feature's hooks. `morpheResourcePatch` defaults to a read-only menu entry for APK-only changes; menu-only features can use `readOnly = false` and a dependent options entry.
+
+Infinity's JNI client-ID getter is kept intact. Managed call sites use a gated bridge so disabling spoofing still calls the original native method without changing its JNI symbol.
+
+The shared extension ships Jackson under `app.morphe.extension.vendored` for its own JSON processing. Boost's native JRAW model conversions still use the app's original parser behind narrow bridges; the extension does not cast between native and vendored JSON types.
+
+Boost's compile-only Kotlin API is in `extensions/boost/stub/src/main/kotlin`. Feature code uses stable class and member names; patches use the matching typed `BoostApi` catalog rather than loading Android stub classes on the patcher JVM:
+
+```kotlin
+val fingerprint = BoostApi.DrawerActivity.setupBottomNavigation.fingerprint()
+```
+
+`patches/src/main/resources/boost/bindings.json` contains the version-specific native targets. Its keys are stable adapter descriptors; its values are complete native class, method and field descriptors, including declaring owners. For an obfuscation-only update, change the target values and declared version, update `AppCompatibility`, and refresh the partial library `boost/mapping.txt` when needed. Do not rename the adapter API or feature code to match obfuscated symbols.
+
+`staticMethods` and `staticFields` describe the adapter API's dispatch. `injectedMethods` identifies bridges cloned from native factories. All targets, prototypes, dispatch kinds and instance receivers are checked against the input APK. Missing or conflicting bindings stop patching. Native signature or behavior changes can still require adapter or patch changes.
+
+Only the extension payload is rebound; the app is not deobfuscated, and placeholder stubs are never packaged. Native callbacks are renamed through the same bindings. Reflective field access uses `BoostFieldNames`, whose non-constant values are resolved during binding, so callers do not embed obfuscated names or precompute hashes for renamed strings.
+
+Extension preparation does not prune classes by reachability. It retains all payload classes except duplicate copies supplied by Boost itself. The final verifier also checks native app references to extension classes so a missing helper stops patching instead of causing a runtime class-loading failure.
+
+Run the release-fixture checks with `BOOST_APK=/path/to/boost-for-reddit.apk ./gradlew :patches:test --tests '*BoostReleaseTest'`. They verify the APK checksum, every partial-library mapping declaration, and all adapter targets, prototypes, dispatch kinds and receivers. Without `BOOST_APK`, the APK-dependent test is skipped; version consistency is still checked. Apply the built bundle with Morphe CLI's `--bytecode-mode=FULL --validate` to check every selected patch against the APK.
+
+## 📚 Everything else
+
+### 📙 Contributing
+
+Thank you for considering contributing to Patcheddit.  
+You can find the contribution guidelines [here](CONTRIBUTING.md).
+
+### 🛠️ Building
+
+To build Patcheddit,
+you can follow the [Morphe documentation](https://github.com/MorpheApp/morphe-documentation).
+
+## 📜 License
+
+Patcheddit is licensed under the [GNU General Public License v3.0](LICENSE), with additional conditions under Section 7:
+
+- **Attribution (7b):** Any use of this code, including derivatives, must display a visible notice:
+
+  > This app uses code from Patcheddit. To learn more, visit https://reddit.com/r/patcheddit
+
+- **Name Restriction (7c):** The name **"Patcheddit"** may not be used for derivative works.  
+  Derivatives must adopt a distinct identity unrelated to "Patcheddit".
+
+The Morphe project (https://github.com/MorpheApp) may use code from this project without displaying the attribution notice.
+
+The Boost for Reddit project (https://github.com/rubenmayayo/boost-for-reddit) is authorized to use any Patcheddit-originated source code under Apache 2.0 license terms.
+
+See the [LICENSE](LICENSE) file for the full GPLv3 terms and the [NOTICE](NOTICE) file for full conditions of GPLv3 Section 7
