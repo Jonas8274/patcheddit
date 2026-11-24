@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-11-24T19:36:01",
+  "description": "# [2.6.0-dev.2](https://github.com/wchill/patcheddit/compare/v2.6.0-dev.1...v2.6.0-dev.2) (2026-11-24)\n\n\n### Bug Fixes\n\n* Handle email and app links in all clients ([2fd41af](https://github.com/wchill/patcheddit/commit/2fd41af850fc241d225667f8cfaf5ec8d3bad27d))\n* **infinity:** API fixes ([f7054cd](https://github.com/wchill/patcheddit/commit/f7054cddbb60adb12fa3e62b41dce525ecb60520))",
+  "download_url": "https://github.com/wchill/patcheddit/releases/download/v2.6.0-dev.2/patches-2.6.0-dev.2.mpp",
+  "signature_download_url": "https://github.com/wchill/patcheddit/releases/download/v2.6.0-dev.2/patches-2.6.0-dev.2.mpp.asc",
+  "version": "2.6.0-dev.2"
+}
