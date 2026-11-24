@@ -1,0 +1,566 @@
+/*
+ * Copyright 2026 wchill.
+ *
+ * See the included NOTICE file for GPLv3 section 7 terms.
+ */
+
+package app.morphe.extension.shared.settings;
+
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.preference.ListPreference;
+import android.preference.Preference;
+import android.preference.PreferenceCategory;
+import android.preference.PreferenceGroup;
+import android.preference.PreferenceScreen;
+import android.preference.EditTextPreference;
+import android.preference.CheckBoxPreference;
+import android.util.Log;
+import android.view.WindowManager;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import app.morphe.extension.shared.debug.ExceptionHook;
+import app.morphe.extension.shared.debug.ExceptionLogStore;
+import app.morphe.extension.shared.debug.FatalCrashLogs;
+
+@SuppressWarnings("deprecation")
+public final class MorpheSettingsActivity extends MorphePreferenceActivity {
+    private static final String TAG = "MorpheDiagnostics";
+    private static final String SCREEN = "morphe_screen";
+    private static final String EXCEPTIONS = "morphe_exception_log";
+    private static final String CRASHES = "morphe_fatal_crash_logs";
+    private static final String SOURCE = "morphe_crash_log_source";
+    static final String ABOUT = "morphe_about";
+    private static final String BOOST_PACKAGE = "com.rubenmayayo.reddit";
+    private static final List<String> SECTION_ORDER = Arrays.asList(
+            "morphe_category_interface",
+            "morphe_category_feed",
+            "morphe_category_navigation",
+            "morphe_category_links",
+            "morphe_category_comments_posting",
+            "morphe_category_content_filtering",
+            "morphe_category_media",
+            "morphe_category_undelete",
+            "morphe_category_login_api",
+            "morphe_category_ads_tracking",
+            "morphe_category_other_patches",
+            "morphe_category_advanced",
+            "morphe_category_diagnostics"
+    );
+    private static final int SAVE_EXCEPTIONS = 7403;
+    private static final int SAVE_CRASH = 7404;
+    private static final int OPEN_CRASH = 7405;
+    private static final int MAX_VIEW_CHARACTERS = 64 * 1024;
+
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private volatile boolean destroyed;
+    private String screen;
+    private PreferenceCategory reports;
+    private Preference action;
+    private Preference clearAction;
+    private int pendingTasks;
+    private Uri pendingSource;
+    private AlertDialog visibleDialog;
+
+    static int sectionOrder(String key, int fallbackOrder) {
+        int order = SECTION_ORDER.indexOf(key);
+        return order < 0 ? fallbackOrder : order;
+    }
+
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        screen = getIntent().getStringExtra(SCREEN);
+        if (screen == null || screen.startsWith("morphe_category_")) {
+            OAuthSettings.migrateLegacyPreferences(this);
+            addPreferencesFromResource(resource("xml", BOOST_PACKAGE.equals(getPackageName())
+                    ? "morphe_boost_settings_skeleton" : "morphe_settings"));
+            setTitle(resource("string", "morphe_settings_title"));
+            bindPatchPreferences(getPreferenceScreen());
+            bindMatureContentLock();
+            bindOAuthPreferences();
+            bindScreen(EXCEPTIONS, EXCEPTIONS);
+            bindScreen("morphe_crash_logs", CRASHES);
+            PreferenceScreen root = getPreferenceScreen();
+            if (screen == null) root.addPreference(aboutPreference());
+            MorpheSettingsStyle.addSectionIcons(this, root);
+            List<Preference> sections = new ArrayList<>();
+            for (int index = 0; index < root.getPreferenceCount(); index++) {
+                sections.add(root.getPreference(index));
+            }
+            int fallbackOrder = SECTION_ORDER.size();
+            for (Preference entry : sections) {
+                entry.setOrder(sectionOrder(entry.getKey(), fallbackOrder));
+                if (!SECTION_ORDER.contains(entry.getKey())) fallbackOrder++;
+            }
+            for (Preference entry : sections) root.removePreference(entry);
+            for (Preference entry : sections) root.addPreference(entry);
+            for (Preference entry : sections) {
+                if (entry instanceof PreferenceScreen) {
+                    entry.setIntent(new Intent(this, MorpheSettingsActivity.class)
+                            .putExtra(SCREEN, entry.getKey()));
+                }
+            }
+            if (screen != null) {
+                Preference entry = findPreference(screen);
+                if (!(entry instanceof PreferenceScreen)) {
+                    throw new IllegalStateException("Missing Morphe settings section: " + screen);
+                }
+                setPreferenceScreen((PreferenceScreen) entry);
+                setTitle(entry.getTitle());
+            }
+            return;
+        }
+        if (!EXCEPTIONS.equals(screen) && !CRASHES.equals(screen)) {
+            Log.e(TAG, "Unknown Morphe diagnostics screen: " + screen);
+            Toast.makeText(this, "Could not open the requested diagnostics screen.", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        addPreferencesFromResource(resource("xml", screen));
+        boolean exceptions = EXCEPTIONS.equals(screen);
+        setTitle(resource("string", exceptions ? "morphe_exception_log_title" : "morphe_crash_logs_title"));
+        Preference category = preference(exceptions ? "morphe_exception_log_reports" : "morphe_crash_logs_reports");
+        if (!(category instanceof PreferenceCategory)) {
+            throw new IllegalStateException("The Morphe reports category is missing.");
+        }
+        reports = (PreferenceCategory) category;
+        if (!exceptions) {
+            // Morphe's logger reads its own setting, not the host app's default preferences.
+            ListPreference debugLevel = (ListPreference) preference(BaseSettings.DEBUG_LEVEL.key);
+            debugLevel.setEntries(new CharSequence[]{
+                    getText(resource("string", "morphe_debug_level_off")),
+                    getText(resource("string", "morphe_debug_level_debug")),
+                    getText(resource("string", "morphe_debug_level_verbose"))
+            });
+            debugLevel.setEntryValues(new CharSequence[]{
+                    DebugLevel.DISABLED.name(), DebugLevel.DEBUG.name(), DebugLevel.VERBOSE.name()
+            });
+            debugLevel.setValue(BaseSettings.DEBUG_LEVEL.get().name());
+            debugLevel.setOnPreferenceChangeListener((entry, value) -> {
+                BaseSettings.DEBUG_LEVEL.save(DebugLevel.valueOf((String) value));
+                return true;
+            });
+        }
+        action = preference(exceptions ? "morphe_exception_log_save" : "morphe_crash_logs_open");
+        action.setOnPreferenceClickListener(ignored -> {
+            if (exceptions) {
+                chooseDocument(Intent.ACTION_CREATE_DOCUMENT, SAVE_EXCEPTIONS, getPackageName() + "-exceptions.log");
+            } else {
+                chooseDocument(Intent.ACTION_OPEN_DOCUMENT, OPEN_CRASH, null);
+            }
+            return true;
+        });
+        clearAction = preference("morphe_log_clear");
+        clearAction.setOnPreferenceClickListener(ignored -> {
+            confirmDeletion(exceptions ? "morphe_exception_log_clear_title" : "morphe_crash_logs_clear_title",
+                    exceptions ? "morphe_exception_log_clear_confirm" : "morphe_crash_logs_clear_confirm",
+                    this::clearReports);
+            return true;
+        });
+        String source = state == null ? null : state.getString(SOURCE);
+        pendingSource = source == null ? null : Uri.parse(source);
+    }
+
+    private Preference aboutPreference() {
+        Preference about = new Preference(this);
+        about.setKey(ABOUT);
+        about.setTitle(resource("string", "morphe_about_title"));
+        about.setSummary("Version " + MorpheAboutDialog.version());
+        about.setPersistent(false);
+        about.setOnPreferenceClickListener(ignored -> {
+            dismissDialog();
+            visibleDialog = MorpheAboutDialog.show(this, worker);
+            return true;
+        });
+        return about;
+    }
+
+    private void bindMatureContentLock() {
+        CheckBoxPreference entry = (CheckBoxPreference) findPreference("morphe_enable_mature_content_lock");
+        if (entry == null) return;
+        boolean locked = MatureContentLock.isLocked(this);
+        entry.setChecked(locked);
+        entry.setEnabled(!locked);
+        if (locked) {
+            entry.setOnPreferenceChangeListener(null);
+            entry.setSummary(resource("string", "morphe_mature_content_locked"));
+            return;
+        }
+        entry.setOnPreferenceChangeListener((preference, value) -> {
+            if (!Boolean.TRUE.equals(value) || MatureContentLock.isLocked(this)) return false;
+            show(new AlertDialog.Builder(this)
+                    .setTitle(resource("string", "morphe_mature_content_lock_title"))
+                    .setMessage(resource("string", "morphe_mature_content_lock_confirm"))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(resource("string", "morphe_mature_content_lock_enable"), (dialog, which) -> {
+                        try {
+                            MatureContentLock.enable(this);
+                            bindMatureContentLock();
+                            message(entry.getTitle().toString(),
+                                    getString(resource("string", "morphe_mature_content_restart")));
+                        } catch (IOException failure) {
+                            Log.e(TAG, "Could not save the mature content lock.", failure);
+                            message(entry.getTitle().toString(),
+                                    getString(resource("string", "morphe_mature_content_lock_failed")));
+                        }
+                    }));
+            return false; // Only reflect the lock after confirmation and saving.
+        });
+    }
+
+    private void bindPatchPreferences(PreferenceGroup group) {
+        for (int index = 0; index < group.getPreferenceCount(); index++) {
+            Preference entry = group.getPreference(index);
+            if (entry instanceof PreferenceGroup) bindPatchPreferences((PreferenceGroup) entry);
+            String key = entry.getKey();
+            if (entry instanceof CheckBoxPreference && key != null && (key.startsWith("morphe_patch_")
+                    || key.equals("morphe_boost_prefer_high_refresh_rate")
+                    || key.equals("morphe_boost_reddit_undelete_enabled")
+                    || key.equals("morphe_boost_imgur_undelete_enabled"))) {
+                entry.setOnPreferenceChangeListener((preference, value) -> {
+                    Toast.makeText(this, "Restart the app to apply the patch change.", Toast.LENGTH_LONG).show();
+                    return true;
+                });
+            }
+        }
+    }
+
+    private void bindOAuthPreferences() {
+        String[] keys = OAuthSettings.preferenceKeys(this);
+        if (findPreference(keys[0]) == null) return;
+        for (String key : keys) {
+            Preference entry = preference(key);
+            if (!(entry instanceof EditTextPreference)) {
+                entry.setSummary(OAuthSettings.defaultValue(key)
+                        + "\nFixed in this APK. Repatch the app to change the callback URI.");
+                continue;
+            }
+            EditTextPreference editor = (EditTextPreference) entry;
+            editor.setSummary(OAuthSettings.summary(key, editor.getText()));
+            editor.setOnPreferenceChangeListener((preference, value) -> {
+                String text = (String) value;
+                String error = OAuthSettings.validationError(key, text);
+                if (error != null) {
+                    Log.w(TAG, "Rejected an invalid OAuth setting.");
+                    Toast.makeText(this, error, Toast.LENGTH_LONG).show();
+                    return false;
+                }
+                preference.setSummary(OAuthSettings.summary(key, text));
+                Toast.makeText(this, "Restart the app and sign in again after changing OAuth values.",
+                        Toast.LENGTH_LONG).show();
+                return true;
+            });
+        }
+    }
+
+    private boolean openScreen(String name) {
+        startActivity(new Intent(this, MorpheSettingsActivity.class).putExtra(SCREEN, name));
+        return true;
+    }
+
+    private void bindScreen(String key, String screen) {
+        Preference entry = findPreference(key);
+        if (entry != null) entry.setOnPreferenceClickListener(ignored -> openScreen(screen));
+    }
+
+    private int resource(String type, String name) {
+        return MorpheSettings.resourceId(this, type, name);
+    }
+
+    private Preference preference(String key) {
+        Preference preference = findPreference(key);
+        if (preference == null) throw new IllegalStateException("Missing Morphe preference: " + key);
+        return preference;
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (reports != null && pendingTasks == 0) refreshReports();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        if (pendingSource != null) state.putString(SOURCE, pendingSource.toString());
+    }
+
+    @Override
+    protected void onDestroy() {
+        destroyed = true;
+        worker.shutdownNow();
+        main.removeCallbacksAndMessages(null);
+        dismissDialog();
+        super.onDestroy();
+    }
+
+    private void refreshReports() {
+        notice("Loading reports...", null);
+        if (EXCEPTIONS.equals(screen)) {
+            runTask(() -> ExceptionHook.getLogStore(getApplicationContext()).reports(), this::displayExceptions,
+                    reason -> notice("Could not load exception reports", reason));
+        } else {
+            runTask(() -> FatalCrashLogs.list(getApplicationContext()), listing -> {
+                reports.removeAll();
+                for (FatalCrashLogs.Entry entry : listing.entries) {
+                    reports.addPreference(report(entry.name, null, () ->
+                            showCrash(entry.uri, entry.name, () -> deleteCrash(entry))));
+                }
+                if (listing.entries.isEmpty()) {
+                    notice("No crash reports found", listing.incomplete
+                            ? "Some locations could not be read. Use the document picker to open a saved report." : null);
+                } else if (listing.incomplete) {
+                    reports.addPreference(noticePreference("Some report locations could not be read",
+                            "Use the document picker to open other saved reports."));
+                }
+            }, reason -> notice("Could not load crash reports", reason));
+        }
+    }
+
+    private void displayExceptions(List<ExceptionLogStore.Report> entries) {
+        reports.removeAll();
+        if (entries.isEmpty()) {
+            notice("No exception reports found", "Errors captured by the Log exceptions patch will appear here.");
+            return;
+        }
+        for (ExceptionLogStore.Report entry : entries) {
+            reports.addPreference(report(entry.exceptionClass,
+                    entry.timestamp.replace('T', ' ').replace("Z", " UTC") + (entry.incomplete ? " (incomplete)" : ""),
+                    () -> showText(entry.exceptionClass, entry.details(MAX_VIEW_CHARACTERS),
+                            null, null, () -> deleteException(entry))));
+        }
+    }
+
+    private Preference report(String title, String summary, Runnable open) {
+        Preference preference = new Preference(this);
+        preference.setTitle(title);
+        preference.setSummary(summary);
+        preference.setPersistent(false);
+        preference.setOnPreferenceClickListener(ignored -> {
+            open.run();
+            return true;
+        });
+        return preference;
+    }
+
+    private void showCrash(Uri uri, String name, Runnable delete) {
+        runTask(() -> FatalCrashLogs.preview(getApplicationContext(), uri, MAX_VIEW_CHARACTERS), preview ->
+                showText(name, (preview.truncated
+                        ? "[Preview shows the end of the report. Export it for the complete contents.]\n\n" : "")
+                        + preview.text, uri, name, delete), reason -> message("Could not open crash report", reason));
+    }
+
+    private void showText(String title, String text, Uri source, String name, Runnable delete) {
+        TextView content = (TextView) getLayoutInflater().inflate(resource("layout", "morphe_log_text"), null);
+        content.setText(text);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(title).setView(scroll);
+        if (source == null) {
+            builder.setPositiveButton(android.R.string.ok, null);
+        } else {
+            builder.setPositiveButton("Save a copy", (ignored, which) -> {
+                pendingSource = source;
+                if (!chooseDocument(Intent.ACTION_CREATE_DOCUMENT, SAVE_CRASH, name)) pendingSource = null;
+            }).setNegativeButton(android.R.string.cancel, null);
+        }
+        if (delete != null) {
+            builder.setNeutralButton(resource("string", "morphe_log_delete"), (ignored, which) ->
+                    confirmDeletion("morphe_log_delete_title", "morphe_log_delete_confirm", delete));
+        }
+        show(builder).setOnDismissListener(ignored -> content.setText(""));
+    }
+
+    private void confirmDeletion(String title, String prompt, Runnable delete) {
+        show(new AlertDialog.Builder(this)
+                .setTitle(resource("string", title))
+                .setMessage(resource("string", prompt))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(resource("string", "morphe_log_delete"), (ignored, which) -> delete.run()));
+    }
+
+    private void deleteException(ExceptionLogStore.Report entry) {
+        runTask(() -> ExceptionHook.getLogStore(getApplicationContext()).deleteReport(entry), removed -> {
+            refreshReports();
+            if (!removed) deletionFailed(getString(resource("string", "morphe_exception_log_changed")));
+        }, reason -> {
+            refreshReports();
+            deletionFailed(reason);
+        });
+    }
+
+    private void deleteCrash(FatalCrashLogs.Entry entry) {
+        runTask(() -> {
+            FatalCrashLogs.delete(getApplicationContext(), entry);
+            return true;
+        }, ignored -> refreshReports(), reason -> {
+            refreshReports();
+            deletionFailed(getString(resource("string", "morphe_crash_logs_delete_failed")));
+        });
+    }
+
+    private void clearReports() {
+        runTask(() -> {
+            if (EXCEPTIONS.equals(screen)) {
+                ExceptionHook.getLogStore(getApplicationContext()).clear();
+                return true;
+            }
+            return FatalCrashLogs.clear(getApplicationContext());
+        }, complete -> {
+            refreshReports();
+            if (!complete) deletionFailed(getString(resource("string", "morphe_crash_logs_clear_incomplete")));
+        }, reason -> {
+            refreshReports();
+            deletionFailed(reason);
+        });
+    }
+
+    private void deletionFailed(String reason) {
+        message(getString(resource("string", "morphe_log_delete_failed")), reason);
+    }
+
+    private boolean chooseDocument(String intentAction, int request, String name) {
+        Intent intent = new Intent(intentAction).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("text/plain").putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+        if (name != null) intent.putExtra(Intent.EXTRA_TITLE, name);
+        try {
+            startActivityForResult(intent, request);
+            return true;
+        } catch (ActivityNotFoundException | SecurityException failure) {
+            Log.e(TAG, "Could not open the document picker.", failure);
+            message("Diagnostics", "The document picker is unavailable or access was denied.");
+            return false;
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != SAVE_EXCEPTIONS && request != SAVE_CRASH && request != OPEN_CRASH) return;
+        Uri source = pendingSource;
+        if (request == SAVE_CRASH) pendingSource = null;
+        if (result != RESULT_OK) return;
+        Uri uri = data == null ? null : data.getData();
+        if (uri == null || !"content".equals(uri.getScheme()) || request == SAVE_CRASH && source == null) {
+            Log.e(TAG, "The document picker did not return a valid diagnostic document.");
+            message("Diagnostics", "The document picker did not return a valid document.");
+            return;
+        }
+        if (request == OPEN_CRASH) {
+            showCrash(uri, "crash_" + getPackageName() + ".txt", null);
+            return;
+        }
+        runTask(() -> {
+            try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                if (output == null) throw new IOException("The selected document is unavailable.");
+                if (request == SAVE_CRASH) {
+                    FatalCrashLogs.copy(getApplicationContext(), source, output);
+                } else {
+                    try (OutputStreamWriter writer = new OutputStreamWriter(output, StandardCharsets.UTF_8)) {
+                        writer.write(ExceptionHook.getLogStore(getApplicationContext()).read());
+                    }
+                }
+            }
+            return true;
+        }, ignored -> message("Log exported", "A full copy was saved. Review it before sharing."),
+                reason -> message("Log export failed", reason));
+    }
+
+    private void notice(String title, String summary) {
+        reports.removeAll();
+        reports.addPreference(noticePreference(title, summary));
+    }
+
+    private Preference noticePreference(String title, String summary) {
+        Preference preference = new Preference(this);
+        preference.setTitle(title);
+        preference.setSummary(summary);
+        preference.setSelectable(false);
+        preference.setPersistent(false);
+        return preference;
+    }
+
+    private AlertDialog show(AlertDialog.Builder builder) {
+        dismissDialog();
+        visibleDialog = builder.create();
+        if (visibleDialog.getWindow() != null) {
+            visibleDialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        }
+        visibleDialog.show();
+        return visibleDialog;
+    }
+
+    private void dismissDialog() {
+        if (visibleDialog != null) {
+            visibleDialog.dismiss();
+            visibleDialog = null;
+        }
+    }
+
+    private void message(String title, String text) {
+        if (!destroyed && !isFinishing()) {
+            show(new AlertDialog.Builder(this).setTitle(title).setMessage(text)
+                    .setPositiveButton(android.R.string.ok, null));
+        }
+    }
+
+    private interface Task<T> {
+        T run() throws IOException;
+    }
+
+    private interface Result<T> {
+        void accept(T value);
+    }
+
+    private <T> void runTask(Task<T> task, Result<T> success, Result<String> failure) {
+        pendingTasks++;
+        updateEnabled();
+        worker.execute(() -> {
+            try {
+                T result = task.run();
+                main.post(() -> {
+                    if (taskFinished()) success.accept(result);
+                });
+            } catch (IOException | SecurityException | IllegalArgumentException error) {
+                if (destroyed) return;
+                Log.e(TAG, "Could not access diagnostic reports or the selected document.", error);
+                main.post(() -> {
+                    if (taskFinished()) failure.accept("Check free storage and document access, then retry.");
+                });
+            }
+        });
+    }
+
+    private boolean taskFinished() {
+        if (destroyed || isFinishing()) return false;
+        pendingTasks--;
+        updateEnabled();
+        return true;
+    }
+
+    private void updateEnabled() {
+        reports.setEnabled(pendingTasks == 0);
+        action.setEnabled(pendingTasks == 0);
+        clearAction.setEnabled(pendingTasks == 0);
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-11-24T21:43:34",
+  "description": "# [2.6.0-dev.3](https://github.com/wchill/patcheddit/compare/v2.6.0-dev.2...v2.6.0-dev.3) (2026-11-24)\n\n\n### Bug Fixes\n\n* Hook additional link resolvers for authenticated /s/ link resolving ([c84920b](https://github.com/wchill/patcheddit/commit/c84920b8f8553cc1ae95e2a1387c92833c7a1978))",
+  "download_url": "https://github.com/wchill/patcheddit/releases/download/v2.6.0-dev.3/patches-2.6.0-dev.3.mpp",
+  "signature_download_url": "https://github.com/wchill/patcheddit/releases/download/v2.6.0-dev.3/patches-2.6.0-dev.3.mpp.asc",
+  "version": "2.6.0-dev.3"
+}

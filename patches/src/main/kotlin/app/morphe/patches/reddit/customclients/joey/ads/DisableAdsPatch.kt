@@ -1,0 +1,29 @@
+/*
+ * Copyright 2026 wchill.
+ * https://github.com/wchill/patcheddit
+ *
+ * See the included NOTICE file for GPLv3 §7(b) and §7(c) terms that apply to this code.
+ */
+
+package app.morphe.patches.reddit.customclients.joey.ads
+
+import app.morphe.patches.reddit.customclients.AppCompatibility
+import app.morphe.patches.reddit.customclients.ExtensionPatches
+import app.morphe.patches.reddit.customclients.morpheBytecodePatch
+import app.morphe.patches.reddit.customclients.joey.detection.piracy.disablePiracyDetectionPatch
+import app.morphe.patcher.util.returnEarly
+
+@Suppress("unused")
+val disableAdsPatch = morpheBytecodePatch(
+    name = "Disable ads",
+    default = true,
+    extensionPatch = ExtensionPatches.Joey,
+) { setting ->
+    dependsOn(disablePiracyDetectionPatch)
+
+    compatibleWith(AppCompatibility.JoeyForRedditFree)
+
+    execute {
+        setting.patchMethod(IsAdFreeUserFingerprint) { returnEarly(true) }
+    }
+}

@@ -1,0 +1,205 @@
+/*
+ * Copyright 2026 wchill.
+ *
+ * See the included NOTICE file for GPLv3 section 7 terms.
+ */
+
+package app.morphe.patches.reddit.customclients.http
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.Patch
+import app.morphe.patcher.patch.classDefForEach
+import app.morphe.patcher.patch.document
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.patch.resourceFile
+import app.morphe.patcher.util.proxy.mutableTypes.MutableAnnotation.Companion.toMutable
+import app.morphe.patcher.util.proxy.mutableTypes.MutableField.Companion.toMutable
+import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
+import app.morphe.patches.reddit.customclients.misc.extension.clientExtensionPatch
+import app.morphe.patches.reddit.customclients.misc.extension.mapping.DexMappingRewriter
+import app.morphe.patches.reddit.customclients.misc.extension.mapping.ProguardMapping
+import app.morphe.patches.reddit.customclients.misc.extension.mapping.forEachReference
+import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile
+import com.android.tools.smali.dexlib2.iface.ClassDef
+import com.android.tools.smali.dexlib2.iface.reference.TypeReference
+import com.android.tools.smali.dexlib2.iface.value.ArrayEncodedValue
+import com.android.tools.smali.dexlib2.iface.value.StringEncodedValue
+import com.android.tools.smali.dexlib2.util.FieldUtil
+import com.android.tools.smali.dexlib2.util.MethodUtil
+import com.android.tools.smali.dexlib2.writer.io.MemoryDataStore
+import com.android.tools.smali.dexlib2.writer.pool.DexPool
+import java.io.ByteArrayInputStream
+import java.io.InputStream
+import java.util.logging.Logger
+
+private val httpLibraryResourcesPatch = patch(default = false) {
+    execute {
+        for (name in listOf("PublicSuffixDatabase.gz", "NOTICE")) {
+            val resource = "okhttp3/internal/publicsuffix/$name"
+            val input = checkNotNull(object {}.javaClass.classLoader.getResourceAsStream("http/$resource")) {
+                "Bundled OkHttp resource was not found: $resource"
+            }
+            input.use { source ->
+                resourceFile("${HTTP_LIBRARY_PREFIX.removePrefix("L")}$resource", copy = false).outputStream().use(source::copyTo)
+            }
+        }
+    }
+}
+
+private const val SIGNATURE_ANNOTATION = "Ldalvik/annotation/Signature;"
+private val signatureClassName = Regex("L[^;<>.]+(?=[;<])")
+
+private fun ClassDef.genericSignatureTypes(): Sequence<String> =
+    (sequenceOf(annotations) + fields.asSequence().map { it.annotations } + methods.asSequence().map { it.annotations })
+        .flatten()
+        .filter { it.type == SIGNATURE_ANNOTATION }
+        .flatMap { it.elements }
+        .mapNotNull { it.value as? ArrayEncodedValue }
+        .map { fragments -> fragments.value.joinToString("") { (it as? StringEncodedValue)?.value.orEmpty() } }
+        .flatMap { signature -> signatureClassName.findAll(signature).map { "${it.value};" } }
+
+internal fun installOkHttpInterceptors(client: String, clientType: String) {
+    val hook = "Lapp/morphe/extension/$client/http/OkHttpRequestHook;"
+    val builder = clientType.removeSuffix(";") + "\$Builder;"
+    val constructor = mutableClassDefBy(clientType).methods.single {
+        it.name == "<init>" && it.parameterTypes.map(CharSequence::toString) == listOf(builder)
+    }
+    constructor.addInstructions(
+        0,
+        """
+            invoke-static {}, $hook->init()V
+            invoke-static/range {p1 .. p1}, $hook->installInterceptor($builder)$builder
+            move-result-object p1
+        """,
+    )
+}
+
+// Keep the extension transport isolated without replacing the client's own HTTP stack.
+internal fun privateHttpExtensionPatch(
+    client: String,
+    vararg hookedClasses: String,
+    relocateClientHttp: Boolean = false,
+) = patch(default = false) {
+    dependsOn(httpLibraryResourcesPatch, clientExtensionPatch(
+        client, hookedClasses, ::preparePrivateHttp,
+        prepareClient = if (relocateClientHttp) ::prepareClientHttpReferences else null,
+    ))
+}
+
+private fun preparePrivateHttp(input: InputStream): InputStream {
+    val dex = input.use { DexBackedDexFile.fromInputStream(null, it.buffered()) }
+    val definitions = dex.classes.toList()
+    val names = definitions.filter { privateSharedLibraryType(it.type) != it.type }
+        .associate { it.type to privateSharedLibraryType(it.type) }
+    check(names.keys.any { it.startsWith("Lokhttp3/") } && names.keys.any { it.startsWith("Lokio/") }) {
+        "HTTP library payload is missing OkHttp or Okio"
+    }
+    return rewriteHttpDex(dex, definitions, names)
+}
+
+private fun prepareClientHttpReferences(input: InputStream): InputStream {
+    val dex = input.use { DexBackedDexFile.fromInputStream(null, it.buffered()) }
+    val definitions = dex.classes.toList()
+    val names = buildMap {
+        for (definition in definitions) definition.forEachReference { reference ->
+            if (reference is TypeReference) {
+                val type = reference.type.trimStart('[')
+                val privateType = privateHttpType(type)
+                if (privateType != type) put(type, privateType)
+            }
+        }
+    }
+    return rewriteHttpDex(dex, definitions, names)
+}
+
+private fun rewriteHttpDex(
+    dex: DexBackedDexFile, definitions: List<ClassDef>, names: Map<String, String>,
+): InputStream {
+    val rewritten = DexMappingRewriter(
+        ProguardMapping.classNames(names), definitions, resolveReflectiveFields = false,
+    ).rewrite(definitions)
+    val pool = DexPool(dex.opcodes)
+    rewritten.forEach(pool::internClass)
+    val output = MemoryDataStore()
+    pool.writeTo(output)
+    return ByteArrayInputStream(output.data)
+}
+
+internal fun httpClientExtensionPatch(
+    client: String,
+    vararg hookedClasses: String,
+): Patch {
+    var nativeClasses = emptyList<ClassDef>()
+    lateinit var profile: HttpLibraryProfile
+    var packageName = ""
+    val packageMetadata = patch(default = false) {
+        execute {
+            document("AndroidManifest.xml").use {
+                packageName = it.documentElement.getAttribute("package")
+            }
+        }
+    }
+    val native = patch(default = false) {
+        dependsOn(packageMetadata)
+        execute {
+            nativeClasses = buildList { classDefForEach(::add) }
+            val resourceNamespace = httpLibraryResourceNamespace(client, packageName, nativeClasses)
+            val input = checkNotNull(object {}.javaClass.classLoader.getResourceAsStream("$resourceNamespace/mapping.txt")) {
+                "HTTP library mapping for $resourceNamespace was not found"
+            }
+            profile = input.reader().use(HttpLibraryProfile::read)
+        }
+    }
+    val extension = privateHttpExtensionPatch(client, *hookedClasses)
+    return patch(default = false) {
+        dependsOn(native, extension)
+        execute {
+            installOkHttpInterceptors(client, privateHttpType("Lokhttp3/OkHttpClient;"))
+        }
+        finalize {
+            val definitions = buildList { classDefForEach(::add) }
+            val completeTypes = definitions.map { it.type }.filter { it.startsWith(HTTP_LIBRARY_PREFIX) }
+            val canonicalTypes = completeTypes.associate {
+                "L${it.removePrefix(HTTP_LIBRARY_PREFIX)}" to it
+            }.filterKeys { privateHttpType(it) != it }
+            val nativeMapping = profile.mapping.withNestedClasses(nativeClasses.map { it.type })
+            val redirected = nativeMapping.mapTargets(::privateHttpType)
+                .withBindings(canonicalTypes, emptyMap(), emptyMap())
+            val rewriter = DexMappingRewriter(redirected, definitions, resolveReflectiveFields = false)
+            val callers = definitions.filter { cls ->
+                if (profile.isNative(cls.type) || cls.type.startsWith(HTTP_LIBRARY_PREFIX)) return@filter false
+                var affected = false
+                cls.forEachReference { reference ->
+                    if (reference is TypeReference && redirected.type(reference.type) != reference.type) {
+                        affected = true
+                    }
+                }
+                // Retrofit reads return and parameter types from generic signatures by reflection, so an
+                // interface whose only OkHttp mention is e.g. Observable<Response<ResponseBody>> must still
+                // be rewritten, or Retrofit resolves the app's own ResponseBody and skips its built-in converter.
+                affected || cls.genericSignatureTypes().any { redirected.type(it) != it }
+            }
+            for (rewritten in rewriter.rewrite(callers)) {
+                val target = mutableClassDefBy(rewritten.type)
+                target.setSuperClass(rewritten.superclass)
+                target.setAccessFlags(rewritten.accessFlags)
+                target.interfaces.apply { clear(); addAll(rewritten.interfaces) }
+                target.annotations.apply { clear(); addAll(rewritten.annotations.map { it.toMutable() }) }
+                val fields = rewritten.fields.map { it.toMutable() }
+                target.fields.apply { clear(); addAll(fields) }
+                target.staticFields.apply { clear(); addAll(fields.filter(FieldUtil::isStatic)) }
+                target.instanceFields.apply { clear(); addAll(fields.filterNot(FieldUtil::isStatic)) }
+                val methods = rewritten.methods.map { it.toMutable() }
+                target.methods.apply { clear(); addAll(methods) }
+                target.directMethods.apply { clear(); addAll(methods.filter(MethodUtil::isDirect)) }
+                target.virtualMethods.apply { clear(); addAll(methods.filterNot(MethodUtil::isDirect)) }
+            }
+            val callerTypes = callers.mapTo(hashSetOf()) { it.type }
+            verifyHttpLibraryReferences(buildList { classDefForEach(::add) }, callerTypes)
+            Logger.getLogger("HttpClientExtension").info(
+                "Redirected ${callers.size} $client classes to complete private OkHttp/Okio libraries",
+            )
+        }
+    }
+}
