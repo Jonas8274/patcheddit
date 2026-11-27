@@ -9,7 +9,7 @@ room = "2.8.4"
 guava = "33.6.0-jre"
 okhttp = "5.3.2"
 androidx-preference = "1.2.1"
-material = "1.13.0"
+material = "1.14.0"
 youtube-player = "13.1.0"
 
 [libraries]
