@@ -32,7 +32,7 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 
 # Used by JVM tools and vendored separately for Android.
 #noinspection NewerVersionAvailable
-jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version = "2.6.0" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version = "2.23.0" }
 
 # Compile against the APIs provided by the stock Boost APK, not the shared extension versions.
 androidx-preference-boost = { module = "androidx.preference:preference", version = "1.2.0" }
